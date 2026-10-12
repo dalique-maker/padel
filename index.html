@@ -36,7 +36,9 @@ h1{margin:0;font:700 clamp(32px,7vw,48px)/1 var(--font-display);text-transform:u
 .steps li[data-state="done"]{color:var(--fg);border-color:var(--accent)}
 .steps li[data-state="active"]{color:var(--fg);border-color:var(--ball)}
 
-.stage{position:relative;width:100%;aspect-ratio:16/9;background:var(--stage);border-radius:10px;overflow:hidden;touch-action:manipulation}
+.main{--maxh:max(300px,calc(100vh - 250px))}
+@supports (height:100dvh){.main{--maxh:max(300px,calc(100dvh - 250px))}}
+.stage{--ar:16 / 9;--arn:1.7778;position:relative;width:min(100%,calc(var(--maxh) * var(--arn)));aspect-ratio:var(--ar);margin-inline:auto;background:var(--stage);border-radius:10px;overflow:hidden;touch-action:manipulation}
 .stage video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;display:block}
 .stage canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
 .empty{position:absolute;inset:0;display:grid;place-content:center;gap:4px;text-align:center;padding:16px;color:#aebcc5}
@@ -92,10 +94,17 @@ select{width:100%;min-height:44px;border-radius:8px;border:1px solid var(--line)
 .alarm span{font:600 clamp(22px,5vw,36px)/1.1 var(--font-display);letter-spacing:.06em;text-transform:uppercase;font-variant-numeric:tabular-nums}
 @media (prefers-reduced-motion:reduce){.alarm,.alarm.on{transition:none}}
 
+@media (max-width:599px){
+  .head p{display:none}
+  body{padding-block:12px 32px}
+  .wrap,.main{gap:12px}
+}
 @media (min-width:860px){
   .wrap{grid-template-columns:minmax(0,1.6fr) minmax(0,1fr)}
   .head{grid-column:1/-1}
+  .main{--maxh:78vh}
 }
+@supports (height:100dvh){@media (min-width:860px){.main{--maxh:78dvh}}}
 </style></head><body>
 <div class="wrap">
   <header class="head">
@@ -110,12 +119,6 @@ select{width:100%;min-height:44px;border-radius:8px;border:1px solid var(--line)
       <li data-s="live">Live</li>
     </ol>
 
-    <div class="stage" id="stage">
-      <video id="vid" playsinline webkit-playsinline muted></video>
-      <canvas id="ov"></canvas>
-      <div class="empty" id="empty"><b>Nog geen beeld</b><span>Start de camera of kies een opgenomen video.</span></div>
-    </div>
-
     <p class="hint" id="hint" aria-live="polite"></p>
     <p class="notice" id="notice" role="status" hidden></p>
 
@@ -123,8 +126,15 @@ select{width:100%;min-height:44px;border-radius:8px;border:1px solid var(--line)
       <button class="btn primary" id="btnCam" type="button">Camera starten</button>
       <label class="btn filebtn" id="btnFile">Video kiezen<input id="file" type="file" accept="video/*"></label>
       <button class="btn primary" id="btnStart" type="button" hidden>Start</button>
+      <button class="btn" id="btnFlip" type="button" hidden>Wissel camera</button>
       <button class="btn" id="btnClear" type="button" hidden>Hoeken wissen</button>
       <button class="btn" id="btnBack" type="button" hidden>Andere bron</button>
+    </div>
+
+    <div class="stage" id="stage">
+      <video id="vid" playsinline webkit-playsinline muted></video>
+      <canvas id="ov"></canvas>
+      <div class="empty" id="empty"><b>Nog geen beeld</b><span>Start de camera of kies een opgenomen video.</span></div>
     </div>
   </main>
 
@@ -142,11 +152,23 @@ select{width:100%;min-height:44px;border-radius:8px;border:1px solid var(--line)
 
     <section class="panel" aria-labelledby="hSet">
       <h2 id="hSet">Instellingen</h2>
+      <div class="field" id="camField" hidden>
+        <label for="camSel">Camera</label>
+        <select id="camSel"></select>
+      </div>
       <div class="field">
         <label for="camPos">Camerastand</label>
         <select id="camPos">
           <option value="short">Achter het veld (korte kant bij de camera)</option>
           <option value="long">Naast het veld (lange kant bij de camera)</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="detail">Detailniveau</label>
+        <select id="detail">
+          <option value="640">Snel (640 punten)</option>
+          <option value="960" selected>Scherp (960 punten)</option>
+          <option value="1280">Maximaal (1280 punten)</option>
         </select>
       </div>
       <div class="field">
@@ -259,7 +281,8 @@ var S = {
   hist: [], ball: null, ballAt: 0, lastAlarm: -1e9, lastBounce: -1e9, outStreak: 0,
   nIn: 0, nOut: 0, havePrev: false, flip: 0, bufs: null, mask: null, mov: null, stack: null,
   loopOn: false, userPaused: false, ms: 0, lastStat: 0, audio: null, alT: 0,
-  colBall: '#c9e400', colOn: '#17200a', dpr: 1
+  colBall: '#c9e400', colOn: '#17200a', dpr: 1,
+  devices: [], devId: null, facing: 'environment', ar: 0, wl: null
 };
 
 function nowSec() { return S.src === 'file' ? vid.currentTime : performance.now() / 1000; }
@@ -341,8 +364,11 @@ function ui() {
   $('btnStart').textContent = p === 'running' ? (S.src === 'file' ? (S.userPaused ? 'Verder' : 'Pauze') : 'Stop') : 'Start';
   $('btnClear').hidden = !(p === 'calibrate' || p === 'ready');
   $('btnBack').hidden = p === 'source';
+  var cam = S.src === 'camera' && p !== 'source';
+  $('btnFlip').hidden = !(cam && p !== 'running');
+  $('camField').hidden = !(cam && S.devices.length > 1);
   var h = '';
-  if (p === 'source') h = 'Kies een bron. Houd de telefoon horizontaal en zet hem op een statief zodat alle vier de hoeken van het veld in beeld zijn.';
+  if (p === 'source') h = 'Kies een bron. Zet de telefoon op een statief, rechtop of horizontaal, zodat alle vier de hoeken van het veld in beeld zijn.';
   else if (p === 'calibrate') h = 'Tik hoek ' + (S.corners.length + 1) + ' van 4 aan: ' + CORNER_NAMES[S.corners.length] + '.';
   else if (p === 'ready') h = 'Het veld staat. Druk op Start om de bal te volgen.';
   else h = S.src === 'file' && S.userPaused ? 'Gepauzeerd.' : 'Bezig. Een bal die buiten de lijnen stuit geeft een rood scherm.';
@@ -357,8 +383,13 @@ function unlockAudio() {
     if (S.audio.state === 'suspended') S.audio.resume();
   } catch (e) { }
 }
+function wakeOn() {
+  try { if (navigator.wakeLock && !S.wl) navigator.wakeLock.request('screen').then(function (l) { S.wl = l; l.addEventListener('release', function () { S.wl = null; }); }, function () { }); } catch (e) { }
+}
+function wakeOff() { try { if (S.wl) { S.wl.release(); S.wl = null; } } catch (e) { } }
+document.addEventListener('visibilitychange', function () { if (!document.hidden && S.phase === 'running') wakeOn(); });
 function releaseSource() {
-  S.loopOn = false;
+  S.loopOn = false; wakeOff();
   if (S.stream) { S.stream.getTracks().forEach(function (t) { t.stop(); }); S.stream = null; }
   if (S.fileUrl) { URL.revokeObjectURL(S.fileUrl); S.fileUrl = null; }
   try { vid.pause(); } catch (e) { }
@@ -371,26 +402,59 @@ function resetSession() {
   $('log').innerHTML = '<li class="none">Nog geen beslissingen.</li>';
   setStatus(false, 'Wacht op beeld');
 }
-function useCamera() {
+// Opent de camera. deviceId = een specifieke lens, anders voor/achter via S.facing.
+// isSwitch = er loopt al een camera; het veld moet dan opnieuw worden aangetikt.
+function openCamera(deviceId, isSwitch) {
   unlockAudio(); notice('');
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     notice('Deze pagina mag de camera hier niet gebruiken. Open haar op een eigen https-adres, of kies een opgenomen video.');
     return;
   }
-  navigator.mediaDevices.getUserMedia({
-    video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 60 } },
-    audio: false
-  }).then(function (stream) {
-    releaseSource(); resetSession();
+  var portrait = window.innerHeight > window.innerWidth;
+  var v = { width: { ideal: portrait ? 720 : 1280 }, height: { ideal: portrait ? 1280 : 720 }, frameRate: { ideal: 60 } };
+  if (deviceId) v.deviceId = { exact: deviceId }; else v.facingMode = { ideal: S.facing };
+  S.loopOn = false;
+  if (isSwitch && S.stream) { S.stream.getTracks().forEach(function (t) { t.stop(); }); S.stream = null; vid.srcObject = null; }
+  navigator.mediaDevices.getUserMedia({ video: v, audio: false }).then(function (stream) {
+    if (isSwitch) { S.corners = []; S.H = null; S.hist = []; S.ball = null; S.ar = 0; wakeOff(); }
+    else { releaseSource(); resetSession(); }
+    var tr = stream.getVideoTracks()[0], st = tr.getSettings ? tr.getSettings() : {};
+    S.devId = st.deviceId || null;
+    if (st.facingMode) S.facing = st.facingMode;
+    else if (tr.label) S.facing = /front|voor|user/i.test(tr.label) ? 'user' : 'environment';
     S.src = 'camera'; S.stream = stream; vid.srcObject = stream; vid.muted = true;
     return vid.play();
-  }).then(function () { setPhase('calibrate'); fit(); })
+  }).then(function () { setPhase('calibrate'); setAspect(); fit(); refreshCameras(); })
     .catch(function (e) {
       var denied = e && (e.name === 'NotAllowedError' || e.name === 'SecurityError');
+      if (isSwitch) { releaseSource(); setPhase('source'); }
       notice(denied
         ? 'De camera is geblokkeerd. Sta de camera toe voor deze pagina (iPhone: Instellingen, Safari, Camera). Lukt dat niet, dan kun je een opgenomen video kiezen.'
-        : 'De camera start niet (' + ((e && e.name) || 'onbekende fout') + '). Kies anders een opgenomen video.');
+        : 'Deze camera start niet (' + ((e && e.name) || 'onbekende fout') + '). Kies een andere camera of een opgenomen video.');
     });
+}
+function useCamera() { openCamera(null, false); }
+function flipCamera() { S.facing = S.facing === 'user' ? 'environment' : 'user'; openCamera(null, true); }
+function refreshCameras() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+  navigator.mediaDevices.enumerateDevices().then(function (list) {
+    S.devices = list.filter(function (d) { return d.kind === 'videoinput' && d.deviceId; });
+    var sel = $('camSel'); sel.innerHTML = '';
+    S.devices.forEach(function (d, i) {
+      var o = document.createElement('option');
+      o.value = d.deviceId; o.textContent = d.label || ('Camera ' + (i + 1));
+      if (d.deviceId === S.devId) o.selected = true;
+      sel.appendChild(o);
+    });
+    ui();
+  }).catch(function () { });
+}
+// Het beeldvlak volgt de stand van de camera: staand (9:16) of liggend (16:9).
+function setAspect() {
+  var vw = vid.videoWidth, vh = vid.videoHeight;
+  if (!vw || !vh) return;
+  stage.style.setProperty('--ar', vw + ' / ' + vh);
+  stage.style.setProperty('--arn', (vw / vh).toFixed(4));
 }
 function useFile(file) {
   if (!file) return;
@@ -410,7 +474,7 @@ vid.addEventListener('error', function () {
   if (S.src === 'file') { notice('Deze video kan niet worden afgespeeld. Probeer een .mp4 of .mov van je telefoon.'); releaseSource(); setPhase('source'); }
 });
 vid.addEventListener('ended', function () {
-  if (S.phase === 'running' && S.src === 'file') { S.loopOn = false; setPhase('ready'); $('hint').textContent = 'De video is afgelopen. Druk op Start om opnieuw te beginnen.'; }
+  if (S.phase === 'running' && S.src === 'file') { S.loopOn = false; wakeOff(); setPhase('ready'); $('hint').textContent = 'De video is afgelopen. Druk op Start om opnieuw te beginnen.'; }
 });
 
 // ---------- Veld kalibreren ----------
@@ -426,6 +490,7 @@ ov.addEventListener('pointerup', function (e) {
   var x = (e.clientX - r.left - f.x) / f.w, y = (e.clientY - r.top - f.y) / f.h;
   if (x < 0 || x > 1 || y < 0 || y > 1) return;
   S.corners.push([x, y]);
+  S.ar = vid.videoWidth / vid.videoHeight;
   if (S.corners.length === 4) {
     var why = !isConvex(S.corners) ? 'De hoeken kruisen elkaar.' : orderProblem(S.corners);
     if (why) { notice(why + ' Wis de hoeken en tik ze opnieuw aan.'); setPhase('calibrate'); return; }
@@ -441,7 +506,7 @@ $('camPos').addEventListener('change', function () { if (S.corners.length === 4)
 function startRun() {
   S.hist = []; S.ball = null; S.havePrev = false; S.outStreak = 0;
   S.lastAlarm = S.lastBounce = -1e9; S.userPaused = false;
-  setPhase('running');
+  setPhase('running'); wakeOn();
   if (S.src === 'file') {
     if (vid.ended || vid.currentTime >= (vid.duration || 0) - 0.1 || vid.currentTime > 0.2) { try { vid.currentTime = 0; } catch (e) { } }
     vid.play();
@@ -455,7 +520,7 @@ $('btnStart').addEventListener('click', function () {
     S.userPaused = !S.userPaused;
     if (S.userPaused) vid.pause(); else { S.havePrev = false; vid.play(); }
     ui();
-  } else if (S.phase === 'running') { S.loopOn = false; setPhase('ready'); }
+  } else if (S.phase === 'running') { S.loopOn = false; wakeOff(); setPhase('ready'); }
 });
 $('btnBack').addEventListener('click', function () { releaseSource(); resetSession(); notice(''); setPhase('source'); });
 $('btnCam').addEventListener('click', useCamera);
@@ -478,8 +543,9 @@ function analyse() {
   var vw = vid.videoWidth, vh = vid.videoHeight;
   if (!vw) return;
   var t0 = performance.now(), t = nowSec();
-  PH = Math.round(PW * vh / vw);
-  var N = PW * PH;
+  var L = +$('detail').value, sc = L / Math.max(vw, vh);
+  PW = Math.round(vw * sc); PH = Math.round(vh * sc);
+  var N = PW * PH, maxA = Math.round(900 * (L / 640) * (L / 640));
   if (off.width !== PW || off.height !== PH) { off.width = PW; off.height = PH; S.havePrev = false; }
   if (!S.mask || S.mask.length !== N) {
     S.mask = new Uint8Array(N); S.mov = new Uint8Array(N); S.stack = new Int32Array(N);
@@ -525,7 +591,7 @@ function analyse() {
       if (y > 0 && mask[k - PW] === 1) { mask[k - PW] = 2; stack[sp++] = k - PW; }
       if (y < PH - 1 && mask[k + PW] === 1) { mask[k + PW] = 2; stack[sp++] = k + PW; }
     }
-    if (area < 3 || area > 900) continue;
+    if (area < 2 || area > maxA) continue;
     var bw = x1 - x0 + 1, bh = y1 - y0 + 1, ar = bw / bh;
     if (ar > 3 || ar < 0.33) continue;
     var fill = area / (bw * bh);
@@ -612,7 +678,19 @@ function beep() {
 $('sens').addEventListener('input', function () { $('sensVal').textContent = this.value; });
 $('margin').addEventListener('input', function () { $('marginVal').textContent = this.value + ' cm'; });
 if (window.ResizeObserver) new ResizeObserver(fit).observe(stage); else window.addEventListener('resize', fit);
-vid.addEventListener('loadedmetadata', draw);
+vid.addEventListener('loadedmetadata', function () { setAspect(); draw(); });
+// Telefoon gedraaid terwijl de camera loopt: het beeld is een ander beeld, dus het veld opnieuw aantikken.
+vid.addEventListener('resize', function () {
+  setAspect();
+  var ar = vid.videoWidth / vid.videoHeight;
+  if (S.src === 'camera' && S.ar && S.corners.length && Math.abs(ar / S.ar - 1) > 0.05) {
+    S.loopOn = false; wakeOff(); S.corners = []; S.H = null; S.hist = []; S.ar = 0;
+    notice('De stand van de camera is veranderd. Tik de hoeken van het veld opnieuw aan.');
+    setPhase('calibrate');
+  } else draw();
+});
+$('btnFlip').addEventListener('click', flipCamera);
+$('camSel').addEventListener('change', function () { openCamera(this.value, true); });
 if (window.matchMedia) {
   var mq = window.matchMedia('(prefers-color-scheme: dark)');
   if (mq.addEventListener) mq.addEventListener('change', function () { cacheColors(); draw(); });
