@@ -404,14 +404,15 @@ function resetSession() {
 }
 // Opent de camera. deviceId = een specifieke lens, anders voor/achter via S.facing.
 // isSwitch = er loopt al een camera; het veld moet dan opnieuw worden aangetikt.
-function openCamera(deviceId, isSwitch) {
+function openCamera(deviceId, isSwitch, swapped) {
   unlockAudio(); notice('');
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     notice('Deze pagina mag de camera hier niet gebruiken. Open haar op een eigen https-adres, of kies een opgenomen video.');
     return;
   }
-  var portrait = window.innerHeight > window.innerWidth;
-  var v = { width: { ideal: portrait ? 720 : 1280 }, height: { ideal: portrait ? 1280 : 720 }, frameRate: { ideal: 60 } };
+  // Eerst het gewone liggende formaat: iOS draait het beeld zelf mee met de stand van de telefoon.
+  // Klopt de stand daarna niet (andere browsers), dan vragen we één keer het omgekeerde formaat.
+  var v = { width: { ideal: swapped ? 720 : 1280 }, height: { ideal: swapped ? 1280 : 720 }, frameRate: { ideal: 60 } };
   if (deviceId) v.deviceId = { exact: deviceId }; else v.facingMode = { ideal: S.facing };
   S.loopOn = false;
   if (isSwitch && S.stream) { S.stream.getTracks().forEach(function (t) { t.stop(); }); S.stream = null; vid.srcObject = null; }
@@ -424,7 +425,12 @@ function openCamera(deviceId, isSwitch) {
     else if (tr.label) S.facing = /front|voor|user/i.test(tr.label) ? 'user' : 'environment';
     S.src = 'camera'; S.stream = stream; vid.srcObject = stream; vid.muted = true;
     return vid.play();
-  }).then(function () { setPhase('calibrate'); setAspect(); fit(); refreshCameras(); })
+  }).then(function () {
+    var phonePortrait = window.innerHeight > window.innerWidth;
+    var framePortrait = vid.videoHeight > vid.videoWidth;
+    if (!swapped && vid.videoWidth && phonePortrait !== framePortrait) { openCamera(S.devId, true, true); return; }
+    setPhase('calibrate'); setAspect(); fit(); refreshCameras();
+  })
     .catch(function (e) {
       var denied = e && (e.name === 'NotAllowedError' || e.name === 'SecurityError');
       if (isSwitch) { releaseSource(); setPhase('source'); }
