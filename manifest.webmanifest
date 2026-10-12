@@ -1,0 +1,16 @@
+{
+  "name": "Padel Lijnrechter",
+  "short_name": "Lijnrechter",
+  "description": "Volgt de padelbal met de camera en toont een rood scherm als de bal buiten de lijnen valt.",
+  "lang": "nl",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0F3A78",
+  "theme_color": "#0F3A78",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
